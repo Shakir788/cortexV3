@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 import os.path
 import requests 
+import base64 # <-- NEW IMPORT
 from io import BytesIO 
 
 # Global variable for the profile data
@@ -11,26 +12,28 @@ MEMORIES = {}
 PROFILE_FILE_PATH = "data/profile.json"
 MEMORIES_FILE_PATH = "data/memories.json" 
 
-# --- Final Global Check (Ensure your .env is loaded) ---
+# --- Final Global Check ---
 WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN")
 API_URL_MEDIA = "https://graph.facebook.com/v18.0/" 
-# --------------------------------------------------------
+# --------------------------
 
-# --- FINAL IMAGE ANALYSIS FUNCTION ---
+# --- FINAL IMAGE ANALYSIS FUNCTION (BASE64 ENCODING) ---
 def analyze_image(media_id, user_prompt):
-    """Downloads image from Meta and analyzes it using GPT-4o (Vision)."""
+    """Downloads image from Meta, converts to Base64, and analyzes it using GPT-4o."""
     
     if not WA_ACCESS_TOKEN:
         return "Cortex: ERROR: Token not loaded for image analysis."
 
-    # Step 1: Get the image file URL from Meta
     media_info_url = f"{API_URL_MEDIA}{media_id}"
     headers = {"Authorization": f"Bearer {WA_ACCESS_TOKEN}"}
     
     try:
+        # Step 1: Get the image file URL from Meta (to get MIME type)
         url_response = requests.get(media_info_url, headers=headers, verify=False)
         url_response.raise_for_status()
-        media_url = url_response.json().get('url')
+        media_data = url_response.json()
+        media_url = media_data.get('url')
+        mime_type = media_data.get('mime_type', 'image/jpeg') # Safely assume jpeg if type is unknown
 
         if not media_url:
             return "Cortex: ERROR: Could not retrieve media URL."
@@ -39,22 +42,21 @@ def analyze_image(media_id, user_prompt):
         image_response = requests.get(media_url, headers=headers, verify=False)
         image_response.raise_for_status()
         
-        # Step 3: Use a Multi-Modal LLM (GPT-4o) for analysis
+        # Step 3: Convert binary image data to Base64
+        base64_image = base64.b64encode(image_response.content).decode('utf-8')
+        
+        # Step 4: Use Multi-Modal LLM (GPT-4o) for analysis with Base64 data
         client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY"),
         )
         
-        # We need the image link for the LLM to access it
-        # NOTE: OpenRouter/GPT-4o can usually access the direct link if provided with the token/header access.
-        # Since we cannot host the image, we rely on the LLM to process the direct URL.
-
         response = client.chat.completions.create(
-            model="openai/gpt-4o", # Best model for Vision
+            model="openai/gpt-4o", 
             messages=[
                 {"role": "user", "content": [
-                    {"type": "text", "text": f"Analyze this image and respond to the user's prompt: {user_prompt}"},
-                    {"type": "image_url", "image_url": {"url": media_url, "detail": "high"}},
+                    {"type": "text", "text": f"Analyze this image based on the user's question: {user_prompt}"},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}},
                 ]}
             ]
         )
