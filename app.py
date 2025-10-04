@@ -11,8 +11,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Load all credentials from the .env file
 load_dotenv() 
 
-# Import the existing chat handler logic and new transcription function
-from chat_handler import chat_with_ai, handle_special_commands, transcribe_audio 
+# Import the existing chat handler logic and new image function
+from chat_handler import chat_with_ai, handle_special_commands, analyze_image 
 
 app = Flask(__name__)
 
@@ -60,7 +60,7 @@ def verify_webhook():
     print("Verification Failed: Token Mismatch!")
     return "Verification token mismatch", 403
 
-# --- 2. Message Reception (VOICE LOGIC ADDED) ---
+# --- 2. Message Reception (IMAGE LOGIC ADDED) ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
@@ -91,22 +91,26 @@ def webhook_handler():
             
             message_text = None
             
-            if message_data.get("type") == "text":
-                message_text = message_data.get("text", {}).get("body")
+            # --- IMAGE MESSAGE HANDLING ---
+            if message_data.get("type") == "image":
+                media_id = message_data["image"]["id"]
+                # Check for accompanying caption (the user's question)
+                user_caption = message_data["image"].get("caption", "Analyze this image.")
+                
+                # Reply to the user that analysis is starting
+                send_whatsapp_message(from_number, "Cortex: Photo mil gayi! Thoda samay deejye, main ise samajh raha hoon. 📸")
+                
+                # Analyze the image
+                ai_response = analyze_image(media_id, user_caption)
+                
+                # Send the final response from the vision model
+                send_whatsapp_message(from_number, ai_response)
+                
+                return jsonify({"status": "image_processed"}), 200
             
-            # --- NEW VOICE MESSAGE HANDLING ---
-            elif message_data.get("type") == "audio":
-                media_id = message_data["audio"]["id"]
-                # Reply to the user that transcription is starting
-                send_whatsapp_message(from_number, "Cortex: Aapki awaaz sun li hai! Thoda samay deejye, main ise samajh raha hoon. 🎧")
-                
-                # Transcribe the audio
-                message_text = transcribe_audio(media_id)
-                
-                if message_text and message_text.startswith("Cortex:"):
-                    # If transcription failed, send the error message directly
-                    send_whatsapp_message(from_number, message_text)
-                    return jsonify({"status": "audio_failed"}), 200
+            # --- TEXT MESSAGE HANDLING ---
+            elif message_data.get("type") == "text":
+                message_text = message_data.get("text", {}).get("body")
 
             # --- PROCESS TEXT/TRANSCRIPT ---
             if message_text:
@@ -128,9 +132,9 @@ def webhook_handler():
                 return jsonify({"status": "message_processed"}), 200
 
             else:
-                # Catch all other unsupported media types (like image, video, document, etc.)
+                # Catch all other unsupported media types (like video, document, etc.)
                 if from_number:
-                    send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages aur voice notes samajh sakta hoon, Mohammad!")
+                    send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages aur images samajh sakta hoon, Mohammad!")
                 return jsonify({"status": "unsupported_type"}), 200
 
         except Exception as e:
@@ -146,5 +150,4 @@ if __name__ == "__main__":
     if not os.getenv("WA_ACCESS_TOKEN"):
         print("\nFATAL ERROR: WA_ACCESS_TOKEN is missing in .env file. Please check and restart.")
     else:
-        app.run(debug=True, port=5000, use_reloader=False) 
-        
+        app.run(debug=True, port=5000, use_reloader=False)

@@ -4,8 +4,6 @@ from openai import OpenAI
 import os.path
 import requests 
 from io import BytesIO 
-import speech_recognition as sr # --- NEW IMPORT ---
-from pydub import AudioSegment # --- NEW IMPORT ---
 
 # Global variable for the profile data
 PROFILE = {}
@@ -18,18 +16,18 @@ WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN")
 API_URL_MEDIA = "https://graph.facebook.com/v18.0/" 
 # --------------------------------------------------------
 
-# --- FINAL VOICE TRANSCRIPTION FUNCTION (FREE GOOGLE API) ---
-def transcribe_audio(media_id):
-    """Downloads audio from Meta and transcribes it using the free Google Web Speech API."""
+# --- FINAL IMAGE ANALYSIS FUNCTION ---
+def analyze_image(media_id, user_prompt):
+    """Downloads image from Meta and analyzes it using GPT-4o (Vision)."""
     
     if not WA_ACCESS_TOKEN:
-        return "Cortex: ERROR: Token not loaded for transcription."
+        return "Cortex: ERROR: Token not loaded for image analysis."
 
+    # Step 1: Get the image file URL from Meta
     media_info_url = f"{API_URL_MEDIA}{media_id}"
     headers = {"Authorization": f"Bearer {WA_ACCESS_TOKEN}"}
     
     try:
-        # Step 1: Get the audio file URL from Meta
         url_response = requests.get(media_info_url, headers=headers, verify=False)
         url_response.raise_for_status()
         media_url = url_response.json().get('url')
@@ -37,38 +35,42 @@ def transcribe_audio(media_id):
         if not media_url:
             return "Cortex: ERROR: Could not retrieve media URL."
 
-        # Step 2: Download the OGG audio data
-        audio_response = requests.get(media_url, headers=headers, verify=False)
-        audio_response.raise_for_status()
+        # Step 2: Download the image data
+        image_response = requests.get(media_url, headers=headers, verify=False)
+        image_response.raise_for_status()
         
-        # Step 3: Convert OGG to WAV format (Needed by Google's API)
-        audio_data = AudioSegment.from_file(BytesIO(audio_response.content), format="ogg")
-        wav_io = BytesIO()
-        audio_data.export(wav_io, format="wav")
-        wav_io.seek(0)
+        # Step 3: Use a Multi-Modal LLM (GPT-4o) for analysis
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+        )
         
-        # Step 4: Transcribe using SpeechRecognition (Google Web Speech)
-        r = sr.Recognizer()
-        with sr.AudioFile(wav_io) as source:
-            audio = r.record(source) 
+        # We need the image link for the LLM to access it
+        # NOTE: OpenRouter/GPT-4o can usually access the direct link if provided with the token/header access.
+        # Since we cannot host the image, we rely on the LLM to process the direct URL.
+
+        response = client.chat.completions.create(
+            model="openai/gpt-4o", # Best model for Vision
+            messages=[
+                {"role": "user", "content": [
+                    {"type": "text", "text": f"Analyze this image and respond to the user's prompt: {user_prompt}"},
+                    {"type": "image_url", "image_url": {"url": media_url, "detail": "high"}},
+                ]}
+            ]
+        )
         
-        # Use Google's free API
-        transcript = r.recognize_google(audio, language="en-IN") # Using Indian English language setting
-        
-        return transcript
+        return response.choices[0].message.content
     
-    except sr.UnknownValueError:
-        return "Cortex: Maafi chahunga, main aapki awaaz samajh nahi paaya. Kya aap dubara bolenge?"
     except requests.exceptions.RequestException as e:
         print(f"MEDIA/NETWORK ERROR: {e}")
-        return f"Cortex: Network error during audio download. ({e.__class__.__name__})"
+        return f"Cortex: Network error during image download/analysis. ({e.__class__.__name__})"
     except Exception as e:
-        print(f"CRITICAL TRANSCRIPTION ERROR: {e}")
-        return f"Cortex: Ek anjana error aa gaya. ({e.__class__.__name__})"
+        print(f"VISION/TRANSCRIPTION ERROR: {e}")
+        return f"Cortex: Analysis error: {e.__class__.__name__}"
 
 
 # --- Memory and Profile Load Functions (REST OF THE FILE) ---
-# ... (All existing functions remain the same) ...
+# ... (All existing functions like load_memories, load_profile, handle_special_commands, chat_with_ai remain the same)
 def get_current_user_id(): return PROFILE.get('name', 'Mohammad')
 def load_memories():
     global MEMORIES
@@ -144,3 +146,4 @@ def chat_with_ai(prompt, history):
         error_msg = f"LLM API Failed. Error: {str(e)[:100]}"
         print(f"CRITICAL LLM API ERROR: {error_msg}")
         return "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi (LLM Error). Mohammad isko thik kar rahe hain!"
+# --- END of chat_handler.py ---
