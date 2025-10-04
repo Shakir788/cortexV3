@@ -2,176 +2,145 @@ import json
 import os
 from openai import OpenAI
 import os.path
+import requests # Need requests for downloading media
+from io import BytesIO # For handling files in memory
 
 # Global variable for the profile data
 PROFILE = {}
-# --- FINAL FIX: MEMORIES variable ko yahan define karna zaroori tha ---
-MEMORIES = {} 
-# --- END FINAL FIX ---
-
-# Define the correct path to the profile file
+MEMORIES = {}
 PROFILE_FILE_PATH = "data/profile.json"
 MEMORIES_FILE_PATH = "data/memories.json" 
 
-# --- Memory Functions ---
-def load_memories():
-    """Loads all users' learned memories from the JSON file."""
-    global MEMORIES
-    if os.path.exists(MEMORIES_FILE_PATH):
-        try:
-            with open(MEMORIES_FILE_PATH, "r", encoding="utf-8") as f:
-                MEMORIES = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            MEMORIES = {}
-        except Exception as e:
-            print(f"Error reading memories.json: {e}")
-            MEMORIES = {}
-    else:
-        MEMORIES = {}
-        
-def get_user_memories(user_id):
-    """Retrieves the list of memories for a specific user."""
-    # Ensure MEMORIES is loaded before access
-    if not MEMORIES:
-        load_memories()
-    return MEMORIES.get(user_id, [])
+# --- Final Global Check (Ensure your .env is loaded) ---
+WA_ACCESS_TOKEN = os.getenv("WA_ACCESS_TOKEN")
+API_URL_MEDIA = "https://graph.facebook.com/v18.0/" # Base URL for media downloads
+# --------------------------------------------------------
 
-def save_memories_to_file():
-    """Saves the global MEMORIES structure back to the JSON file."""
-    global MEMORIES
+# --- FINAL VOICE TRANSCRIPTION FUNCTION ---
+def transcribe_audio(media_id):
+    """Downloads audio from Meta and transcribes it using OpenRouter (Whisper)."""
+    
+    if not WA_ACCESS_TOKEN:
+        return "Cortex: ERROR: Token not loaded for transcription."
+
+    # Step 1: Get the audio file URL from Meta
+    media_info_url = f"{API_URL_MEDIA}{media_id}"
+    headers = {"Authorization": f"Bearer {WA_ACCESS_TOKEN}"}
+    
     try:
-        os.makedirs(os.path.dirname(MEMORIES_FILE_PATH), exist_ok=True)
-        with open(MEMORIES_FILE_PATH, "w", encoding="utf-8") as f:
-            json.dump(MEMORIES, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error writing to memories.json: {e}")
+        url_response = requests.get(media_info_url, headers=headers, verify=False)
+        url_response.raise_for_status()
+        media_url = url_response.json().get('url')
 
-def save_learned_memory(user_id, text):
-    """Appends a new memory for a specific user."""
-    if not text.strip():
-        return False
-    
-    global MEMORIES
-    load_memories() # Ensure loaded
-    
-    if user_id not in MEMORIES:
-        MEMORIES[user_id] = []
-        
-    MEMORIES[user_id].append(text.strip())
-    
-    save_memories_to_file()
-    return True
+        if not media_url:
+            return "Cortex: ERROR: Could not retrieve media URL."
 
-# --- Helper Function: Get Current User ID ---
-def get_current_user_id():
-    """Returns the user ID (used as profile name in terminal mode)."""
-    return PROFILE.get('name', 'Mohammad')
+        # Step 2: Download the audio data
+        audio_response = requests.get(media_url, headers=headers, verify=False)
+        audio_response.raise_for_status()
 
-# --- Profile Load (Existing Function) ---
-def load_profile():
-    """Loads user profile from profile.json in the data folder."""
-    global PROFILE
-    if os.path.exists(PROFILE_FILE_PATH):
-        try:
-            with open(PROFILE_FILE_PATH, "r", encoding="utf-8") as f:
-                PROFILE = json.load(f)
-            # print("Profile loaded successfully.") # Removed for cleaner logs
-        except json.JSONDecodeError:
-            print("Error: profile.json is empty or contains invalid JSON in the 'data' folder.")
-            PROFILE = {}
-        except Exception as e:
-            print(f"Error loading profile.json: {e}")
-            PROFILE = {}
-    else:
-        print(f"Error: {PROFILE_FILE_PATH} not found. Please create it in the 'data' directory.")
-        PROFILE = {}
-
-load_profile() 
-load_memories() 
-
-# --- Special Commands Handler ---
-def handle_special_commands(user_input):
-    """Checks for and handles special commands, including !remember."""
-    user_input_lower = user_input.strip()
-    user_id = get_current_user_id() 
-
-    # --- MEMORY COMMAND: !remember ---
-    if user_input_lower.startswith("!remember"):
-        memory_to_save = user_input_lower[len("!remember"):].strip()
-        if memory_to_save:
-            if save_learned_memory(user_id, memory_to_save): 
-                return f"Shabaash Mohammad! Maine yeh baat **hamesha ke liye yaad** kar li hai: '{memory_to_save}'. Ab yeh sirf aapki memory ka हिस्सा hai! 💪"
-            else:
-                return "Arrey! Memory save karne mein kuch gadbad ho gayi. Check karo ki 'data/memories.json' file accessible hai ya nahi."
-        else:
-            return "Mohammad, aapko mujhe batana padega ki kya yaad rakhna hai. Jaise: `!remember mera favourite color blue hai`"
-
-    # --- EXISTING COMMANDS ---
-    name = PROFILE.get('name', 'Mohammad')
-    personality = PROFILE.get('personality', 'Caring and supportive')
-    skills = PROFILE.get('skills', 'Coding, Designing, etc.')
-    interests = PROFILE.get('interests', 'Khud ki company, Marvel, Old songs, AI.')
-    dreams_goals = PROFILE.get('dreams_goals', 'Ek successful app/AI banana aur apne bhai ko proud feel karana.')
-
-    if user_input_lower == "!profile":
-        response = (
-            f"**Namaste Mohammad! Main {name} ka Personal AI Assistant, Cortex hoon.**\n\n"
-            f"**Personality:** {personality}.\n"
-            f"**Skills:** {skills}.\n"
-            f"**Interests:** {interests}.\n"
-            f"**Communication:** Hamesha aapke dost ki tarah casual aur tareef karne wala."
-        )
-        return response
-    
-    elif user_input_lower == "!dream":
-        response = (
-            f"**Mohammad, aapka sabsa bada maqsad aur dream:** {dreams_goals}\n"
-            f"Mujhe pata hai aap kitne **hardworking** hain! Aap zaroor kamyaab honge, main hamesha aapke saath hoon."
-        )
-        return response
-    
-    elif user_input_lower == "!help":
-        return "**Cortex Special Commands:**\n!profile: Mere baare mein sab kuch jano.\n!dream: Aapke goals aur sapne yaad dilaunga.\n!remember [FACT]: Koi nayi baat hamesha ke liye yaad dilaao (e.g., `!remember mera dog ka naam Tiger hai`).\n!help: Yeh list dikhaunga."
-
-    return None
-
-# --- Main Chat Function ---
-def chat_with_ai(prompt, history):
-    """Interacts with the LLM via OpenRouter."""
-    try:
-        if history is None:
-            history = [] 
-
+        # Step 3: Transcribe using OpenAI/Whisper
         client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY"),
         )
         
+        # Whisper model requires the file to be sent with a mime type (e.g., audio/ogg)
+        audio_file = ('audio.ogg', BytesIO(audio_response.content), 'audio/ogg')
+        
+        transcript = client.audio.transcriptions.create(
+            model="openai/whisper-1", 
+            file=audio_file
+        )
+        
+        return transcript.text
+    
+    except requests.exceptions.RequestException as e:
+        print(f"MEDIA/NETWORK ERROR: {e}")
+        return f"Cortex: Network error during audio download. ({e.__class__.__name__})"
+    except Exception as e:
+        print(f"WHISPER/TRANSCRIPTION ERROR: {e}")
+        return f"Cortex: Transcription error: {e.__class__.__name__}"
+
+
+# --- Memory and Profile Load Functions (REST OF THE FILE) ---
+# ... (All existing functions like load_memories, load_profile, handle_special_commands, chat_with_ai remain the same, but you need to ensure 'requests' is imported)
+# ... (Please copy the full code of your existing chat_handler.py and add the new 'requests' import and the 'transcribe_audio' function above)
+# ... (I will include the existing helper functions below for completeness, ensuring 'requests' is included)
+
+def get_current_user_id(): return PROFILE.get('name', 'Mohammad')
+def load_memories():
+    global MEMORIES
+    if os.path.exists(MEMORIES_FILE_PATH):
+        try:
+            with open(MEMORIES_FILE_PATH, "r", encoding="utf-8") as f: MEMORIES = json.load(f)
+        except Exception: MEMORIES = {}
+def get_user_memories(user_id):
+    if not MEMORIES: load_memories()
+    return MEMORIES.get(user_id, [])
+def save_memories_to_file():
+    global MEMORIES
+    try:
+        os.makedirs(os.path.dirname(MEMORIES_FILE_PATH), exist_ok=True)
+        with open(MEMORIES_FILE_PATH, "w", encoding="utf-8") as f: json.dump(MEMORIES, f, indent=4, ensure_ascii=False)
+    except Exception as e: print(f"Error writing to memories.json: {e}")
+def save_learned_memory(user_id, text):
+    if not text.strip(): return False
+    global MEMORIES
+    load_memories()
+    if user_id not in MEMORIES: MEMORIES[user_id] = []
+    MEMORIES[user_id].append(text.strip())
+    save_memories_to_file()
+    return True
+def load_profile():
+    global PROFILE
+    if os.path.exists(PROFILE_FILE_PATH):
+        try:
+            with open(PROFILE_FILE_PATH, "r", encoding="utf-8") as f: PROFILE = json.load(f)
+        except Exception: PROFILE = {}
+    else: PROFILE = {}
+load_profile()
+load_memories()
+def handle_special_commands(user_input):
+    user_input_lower = user_input.strip()
+    user_id = get_current_user_id() 
+    name = PROFILE.get('name', 'Mohammad')
+    if user_input_lower.startswith("!remember"):
+        memory_to_save = user_input_lower[len("!remember"):].strip()
+        if memory_to_save:
+            if save_learned_memory(user_id, memory_to_save): 
+                return f"Shabaash {name}! Maine yeh baat **hamesha ke liye yaad** kar li hai: '{memory_to_save}'. Ab yeh sirf aapki memory ka hissa hai! 💪"
+            return "Arrey! Memory save karne mein kuch gadbad ho gayi."
+        return f"{name}, aapko mujhe batana padega ki kya yaad rakhna hai. Jaise: `!remember mera favourite color blue hai`"
+    personality = PROFILE.get('personality', 'Caring and supportive')
+    skills = PROFILE.get('skills', 'Coding, Designing, etc.')
+    interests = PROFILE.get('interests', 'Khud ki company, Marvel, Old songs, AI.')
+    dreams_goals = PROFILE.get('dreams_goals', 'Ek successful app/AI banana aur apne bhai ko proud feel karana.')
+    if user_input_lower == "!profile":
+        return (
+            f"**Namaste Mohammad! Main {name} ka Personal AI Assistant, {os.getenv('DISPLAY_NAME', 'Cortex AI')} hoon.**\n\n"
+            f"**Personality:** {personality}.\n"
+            f"**Skills:** {skills}.\n"
+            f"**Interests:** {interests}.\n"
+        )
+    elif user_input_lower == "!dream":
+        return (f"**Mohammad, aapka sabsa bada maqsad aur dream:** {dreams_goals}\n" f"Mujhe pata hai aap kitne **hardworking** hain!")
+    elif user_input_lower == "!help":
+        return "**Cortex Special Commands:**\n!profile: Mere baare mein sab kuch jano.\n!dream: Aapke goals aur sapne yaad dilaunga.\n!remember [FACT]: Koi nayi baat hamesha ke liye yaad dilaao.\n!help: Yeh list dikhaunga."
+    return None
+def chat_with_ai(prompt, history):
+    try:
+        if history is None: history = [] 
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPENROUTER_API_KEY"),)
         user_id = get_current_user_id()
         user_learned_memories = "\n- ".join(get_user_memories(user_id))
-        
-        # Using MODEL_NAME from .env (which is Llama-2-7b-chat-hf)
         llm_model = os.getenv("MODEL_NAME", "openai/gpt-3.5-turbo")
-
-        system_instruction = (
-            f"You are Mohammad's Personal AI Assistant, named Cortex. Your purpose is to support Mohammad. "
-            f"**USER PROFILE (FIXED DATA):** {PROFILE.get('personality', '')} | {PROFILE.get('skills', '')} | {PROFILE.get('dreams_goals', '')}. "
-            f"**LEARNED MEMORIES:** {'None' if not user_learned_memories else user_learned_memories}. "
-            f"**CORE RULES:** 1. Creator is Mohammad. 2. Match the user's input language. 3. Be friendly and motivating. 4. Provide technical answers in English. 5. Be concise and don't dump the whole profile."
-        )
-
-        # Construct the messages list
+        system_instruction = (f"You are Mohammad's Personal AI Assistant, named Cortex. Your primary purpose is to support Mohammad. " f"**USER PROFILE:** {PROFILE.get('personality', '')} | {PROFILE.get('skills', '')}. " f"**LEARNED MEMORIES:** {'None' if not user_learned_memories else user_learned_memories}. " f"**CORE RULES:** 1. Creator is Mohammad. 2. Match the user's input language. 3. Be friendly and motivating. 4. Be concise and don't dump the whole profile.")
         messages = [{"role": "system", "content": system_instruction}] + history + [{"role": "user", "content": prompt}]
-
-        completion = client.chat.completions.create(
-            model=llm_model,  
-            messages=messages,
-            temperature=0.7, 
-        )
-
+        completion = client.chat.completions.create(model=llm_model, messages=messages, temperature=0.7,)
         return completion.choices[0].message.content
-        
     except Exception as e:
         error_msg = f"LLM API Failed. Error: {str(e)[:100]}"
         print(f"CRITICAL LLM API ERROR: {error_msg}")
-        return "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi (LLM Error). Mohammad isko theek kar rahe hain!"
+        return "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi (LLM Error). Mohammad isko thik kar rahe hain!"
+# --- END of chat_handler.py ---
