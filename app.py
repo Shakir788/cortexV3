@@ -60,7 +60,7 @@ def verify_webhook():
     print("Verification Failed: Token Mismatch!")
     return "Verification token mismatch", 403
 
-# --- 2. Message Reception (IMAGE LOGIC ADDED) ---
+# --- 2. Message Reception (IMAGE LOGIC WITH MEMORY FIX) ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
@@ -91,20 +91,27 @@ def webhook_handler():
             
             message_text = None
             
-            # --- IMAGE MESSAGE HANDLING ---
+            # --- INITIALIZE HISTORY ---
+            if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
+            user_history = CHAT_CONTEXT_HISTORY[from_number]
+
+            # --- IMAGE MESSAGE HANDLING (MEMORY FIX HERE) ---
             if message_data.get("type") == "image":
                 media_id = message_data["image"]["id"]
-                # Check for accompanying caption (the user's question)
                 user_caption = message_data["image"].get("caption", "Analyze this image.")
                 
-                # Reply to the user that analysis is starting
                 send_whatsapp_message(from_number, "Cortex: Photo mil gayi! Thoda samay deejye, main ise samajh raha hoon. 📸")
                 
-                # Analyze the image
                 ai_response = analyze_image(media_id, user_caption)
                 
-                # Send the final response from the vision model
                 send_whatsapp_message(from_number, ai_response)
+                
+                # --- NEW CODE: HISTORY UPDATE FOR IMAGE ---
+                # Save the interaction to history for context
+                # NOTE: We save the caption as user input and the AI response.
+                user_history.append({"role": "user", "content": f"IMAGE: {user_caption}"})
+                user_history.append({"role": "assistant", "content": ai_response})
+                CHAT_CONTEXT_HISTORY[from_number] = user_history[-10:] 
                 
                 return jsonify({"status": "image_processed"}), 200
             
@@ -114,8 +121,6 @@ def webhook_handler():
 
             # --- PROCESS TEXT/TRANSCRIPT ---
             if message_text:
-                if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
-                user_history = CHAT_CONTEXT_HISTORY[from_number]
                 
                 special_response = handle_special_commands(message_text)
                 
@@ -132,7 +137,6 @@ def webhook_handler():
                 return jsonify({"status": "message_processed"}), 200
 
             else:
-                # Catch all other unsupported media types (like video, document, etc.)
                 if from_number:
                     send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages aur images samajh sakta hoon, Mohammad!")
                 return jsonify({"status": "unsupported_type"}), 200
