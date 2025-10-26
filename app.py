@@ -11,18 +11,22 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Load all credentials from the .env file
 load_dotenv() 
 
-# Import the existing chat handler logic and new image function
-from chat_handler import chat_with_ai, handle_special_commands, analyze_image 
+# Import the chat handler logic
+from chat_handler import chat_with_ai, handle_special_commands, analyze_image, transcribe_audio 
 
 app = Flask(__name__)
 
 # --- Global Settings ---
-VERIFY_TOKEN = "MOHAMMAD_CORTEX_2025"  
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "MOHAMMAD_CORTEX_2025")
 
 CHAT_CONTEXT_HISTORY = {} 
 
-def send_whatsapp_message(to_number, text_message):
-    """Sends a message back to the user via WhatsApp API."""
+# --- NEW/UPDATED: Interactive/Text Message Sender ---
+def send_whatsapp_interactive_message(to_number, message_payload):
+    """
+    Sends a message back to the user via WhatsApp API.
+    message_payload can be a simple string (text) or a dictionary (interactive).
+    """
     
     WA_TOKEN = os.getenv("WA_ACCESS_TOKEN")
     WA_PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
@@ -34,8 +38,17 @@ def send_whatsapp_message(to_number, text_message):
         return {"status": "error", "message": "WA Credentials missing"}
 
     headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
-    data = {"messaging_product": "whatsapp", "to": to_number, "type": "text", "text": {"body": text_message}}
     
+    if isinstance(message_payload, str):
+        # Case 1: Simple Text Message
+        data = {"messaging_product": "whatsapp", "to": to_number, "type": "text", "text": {"body": message_payload}}
+    elif isinstance(message_payload, dict):
+        # Case 2: Interactive Message (e.g., Reply Buttons, List Messages)
+        data = {"messaging_product": "whatsapp", "to": to_number, "type": "interactive", "interactive": message_payload}
+    else:
+        print(f"ERROR: Invalid message payload type: {type(message_payload)}")
+        return {"status": "error", "message": "Invalid payload type"}
+        
     try:
         response = requests.post(API_URL, headers=headers, json=data, verify=False) 
         
@@ -49,18 +62,17 @@ def send_whatsapp_message(to_number, text_message):
         print(f"CRITICAL NETWORK ERROR: Could not connect to Meta API. Error: {e}")
         return {"status": "network_fail"}
 
-# --- 1. Webhook Verification ---
+# --- 1. Webhook Verification (UNMODIFIED) ---
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    VERIFY_TOKEN = "MOHAMMAD_CORTEX_2025" 
-    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN: 
         print("Webhook Verified Successfully!")
         return request.args.get("hub.challenge"), 200
     
     print("Verification Failed: Token Mismatch!")
     return "Verification token mismatch", 403
 
-# --- 2. Message Reception (IMAGE LOGIC WITH MEMORY FIX) ---
+# --- 2. Message Reception (INTERACTIVE HANDLING ADDED) ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
@@ -95,56 +107,98 @@ def webhook_handler():
             if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
             user_history = CHAT_CONTEXT_HISTORY[from_number]
 
-            # --- IMAGE MESSAGE HANDLING (MEMORY FIX HERE) ---
-            if message_data.get("type") == "image":
+            # --- NEW: INTERACTIVE (BUTTON/LIST) MESSAGE HANDLING ---
+            if message_data.get("type") == "interactive":
+                # Yeh woh 'id' hai jo user ne button click karne par bheji hai!
+                interactive_data = message_data.get("interactive", {})
+                
+                if interactive_data.get("type") == "button_reply":
+                    # Reply Button se aayi hui ID
+                    message_id = interactive_data["button_reply"]["id"]
+                    message_title = interactive_data["button_reply"]["title"]
+                    message_text = f"!INTERACTIVE: {message_id} ({message_title})" 
+                    
+                elif interactive_data.get("type") == "list_reply":
+                    # List Menu se aayi hui ID
+                    message_id = interactive_data["list_reply"]["id"]
+                    message_title = interactive_data["list_reply"]["title"]
+                    message_text = f"!INTERACTIVE: {message_id} ({message_title})"
+                
+                # IMPORTANT: Hum is message_text ko aage process karenge
+                send_whatsapp_interactive_message(from_number, f"Cortex: Aapne **{message_title}** chuna hai. Main ab jawab de raha hoon.")
+
+            # --- IMAGE MESSAGE HANDLING (Simplified call to new function) ---
+            elif message_data.get("type") == "image":
                 media_id = message_data["image"]["id"]
                 user_caption = message_data["image"].get("caption", "Analyze this image.")
                 
-                send_whatsapp_message(from_number, "Cortex: Photo mil gayi! Thoda samay deejye, main ise samajh raha hoon. 📸")
+                send_whatsapp_interactive_message(from_number, "Cortex: Photo mil gayi! Thoda samay deejye, main ise samajh raha hoon. 📸")
                 
                 ai_response = analyze_image(media_id, user_caption)
                 
-                send_whatsapp_message(from_number, ai_response)
+                send_whatsapp_interactive_message(from_number, ai_response)
                 
-                # --- NEW CODE: HISTORY UPDATE FOR IMAGE ---
-                # Save the interaction to history for context
-                # NOTE: We save the caption as user input and the AI response.
                 user_history.append({"role": "user", "content": f"IMAGE: {user_caption}"})
                 user_history.append({"role": "assistant", "content": ai_response})
                 CHAT_CONTEXT_HISTORY[from_number] = user_history[-10:] 
                 
                 return jsonify({"status": "image_processed"}), 200
             
-            # --- TEXT MESSAGE HANDLING ---
+            # --- AUDIO MESSAGE HANDLING (Simplified call to new function) ---
+            elif message_data.get("type") == "audio":
+                media_id = message_data["audio"]["id"]
+                send_whatsapp_interactive_message(from_number, "Cortex: Voice message mil gaya! Thoda samay deejye, main ise sunn kar samjh raha hoon. 🎧")
+                
+                message_text = transcribe_audio(media_id)
+                
+                if message_text.startswith("Cortex: ERROR"):
+                     send_whatsapp_interactive_message(from_number, message_text)
+                     return jsonify({"status": "audio_transcription_failed"}), 200
+                
+                send_whatsapp_interactive_message(from_number, f"Cortex (Transcribed): *{message_text[:40]}...* (ab main iska jawab de raha hoon)")
+                
+            # --- TEXT MESSAGE HANDLING (Simple) ---
             elif message_data.get("type") == "text":
                 message_text = message_data.get("text", {}).get("body")
+            
+            # --- OTHER MESSAGE TYPES ---
+            else:
+                 if from_number:
+                     send_whatsapp_interactive_message(from_number, "Cortex: Abhi main sirf text, images, voice notes aur buttons samajh sakta hoon, Mohammad!")
+                 return jsonify({"status": "unsupported_type"}), 200
 
-            # --- PROCESS TEXT/TRANSCRIPT ---
+
+            # --- PROCESS TEXT/TRANSCRIPT/INTERACTIVE ID ---
             if message_text:
                 
+                # Phele Special Commands check karo (jaise !remember)
                 special_response = handle_special_commands(message_text)
                 
                 if special_response:
-                    send_whatsapp_message(from_number, special_response)
+                    send_whatsapp_interactive_message(from_number, special_response)
+                
+                # Agar Interactive ID ya normal text ho, toh chat_with_ai ko de do
                 else:
                     ai_response = chat_with_ai(message_text, user_history)
-                    send_whatsapp_message(from_number, ai_response)
+                    
+                    # Ab yahan logic aayegi ki kya Text bhejoon ya Interactive Button bhejoon?
+                    # Agar AI ne ek special tag (jaise [BUTTONS] ya [LIST]) reply kiya hai, toh use parse karo.
+                    
+                    # FOR SIMPLICITY: Abhi hum simple text hi bhej rahe hain, lekin ab hamara function Interactive messages bhej sakta hai.
+                    send_whatsapp_interactive_message(from_number, ai_response)
                     
                     user_history.append({"role": "user", "content": message_text})
                     user_history.append({"role": "assistant", "content": ai_response})
                     CHAT_CONTEXT_HISTORY[from_number] = user_history[-10:] 
                     
                 return jsonify({"status": "message_processed"}), 200
-
-            else:
-                if from_number:
-                    send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages aur images samajh sakta hoon, Mohammad!")
-                return jsonify({"status": "unsupported_type"}), 200
+            
+            return jsonify({"status": "message_text_empty"}), 200
 
         except Exception as e:
             print(f"CRITICAL RUNTIME ERROR: {e}")
             if 'from_number' in locals() and from_number:
-                 send_whatsapp_message(from_number, "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi. Detail: Check terminal for network errors.")
+                send_whatsapp_interactive_message(from_number, "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi. Detail: Check terminal for network errors.")
             
             return jsonify({"status": "runtime_error", "details": str(e)}), 200
     
