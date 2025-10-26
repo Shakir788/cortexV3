@@ -11,7 +11,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Load all credentials from the .env file
 load_dotenv() 
 
-# Import the chat handler logic
+# Import the existing chat handler logic and new image/audio function
 from chat_handler import chat_with_ai, handle_special_commands, analyze_image, transcribe_audio 
 
 app = Flask(__name__)
@@ -21,7 +21,6 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "MOHAMMAD_CORTEX_2025")
 
 CHAT_CONTEXT_HISTORY = {} 
 
-# --- NEW/UPDATED: Interactive/Text Message Sender ---
 def send_whatsapp_interactive_message(to_number, message_payload):
     """
     Sends a message back to the user via WhatsApp API.
@@ -72,7 +71,7 @@ def verify_webhook():
     print("Verification Failed: Token Mismatch!")
     return "Verification token mismatch", 403
 
-# --- 2. Message Reception (INTERACTIVE HANDLING ADDED) ---
+# --- 2. Message Reception (VOICE HANDLER REMOVED FOR STABILITY) ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
@@ -107,27 +106,23 @@ def webhook_handler():
             if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
             user_history = CHAT_CONTEXT_HISTORY[from_number]
 
-            # --- NEW: INTERACTIVE (BUTTON/LIST) MESSAGE HANDLING ---
+            # --- INTERACTIVE (BUTTON/LIST) MESSAGE HANDLING ---
             if message_data.get("type") == "interactive":
-                # Yeh woh 'id' hai jo user ne button click karne par bheji hai!
                 interactive_data = message_data.get("interactive", {})
                 
                 if interactive_data.get("type") == "button_reply":
-                    # Reply Button se aayi hui ID
                     message_id = interactive_data["button_reply"]["id"]
                     message_title = interactive_data["button_reply"]["title"]
                     message_text = f"!INTERACTIVE: {message_id} ({message_title})" 
                     
                 elif interactive_data.get("type") == "list_reply":
-                    # List Menu se aayi hui ID
                     message_id = interactive_data["list_reply"]["id"]
                     message_title = interactive_data["list_reply"]["title"]
                     message_text = f"!INTERACTIVE: {message_id} ({message_title})"
                 
-                # IMPORTANT: Hum is message_text ko aage process karenge
                 send_whatsapp_interactive_message(from_number, f"Cortex: Aapne **{message_title}** chuna hai. Main ab jawab de raha hoon.")
 
-            # --- IMAGE MESSAGE HANDLING (Simplified call to new function) ---
+            # --- IMAGE MESSAGE HANDLING (UNMODIFIED) ---
             elif message_data.get("type") == "image":
                 media_id = message_data["image"]["id"]
                 user_caption = message_data["image"].get("caption", "Analyze this image.")
@@ -144,18 +139,11 @@ def webhook_handler():
                 
                 return jsonify({"status": "image_processed"}), 200
             
-            # --- AUDIO MESSAGE HANDLING (Simplified call to new function) ---
+            # --- AUDIO MESSAGE HANDLING (NOW UNSUPPORTED) ---
             elif message_data.get("type") == "audio":
-                media_id = message_data["audio"]["id"]
-                send_whatsapp_interactive_message(from_number, "Cortex: Voice message mil gaya! Thoda samay deejye, main ise sunn kar samjh raha hoon. 🎧")
-                
-                message_text = transcribe_audio(media_id)
-                
-                if message_text.startswith("Cortex: ERROR"):
-                     send_whatsapp_interactive_message(from_number, message_text)
-                     return jsonify({"status": "audio_transcription_failed"}), 200
-                
-                send_whatsapp_interactive_message(from_number, f"Cortex (Transcribed): *{message_text[:40]}...* (ab main iska jawab de raha hoon)")
+                 if from_number:
+                     send_whatsapp_interactive_message(from_number, "Cortex: Maafi chahunga, Voice Note feature abhi **Maintenance** mein hai. Kripya **text message** ya **Image** bhejein. 🙏")
+                 return jsonify({"status": "unsupported_audio_due_to_timeout"}), 200
                 
             # --- TEXT MESSAGE HANDLING (Simple) ---
             elif message_data.get("type") == "text":
@@ -164,27 +152,20 @@ def webhook_handler():
             # --- OTHER MESSAGE TYPES ---
             else:
                  if from_number:
-                     send_whatsapp_interactive_message(from_number, "Cortex: Abhi main sirf text, images, voice notes aur buttons samajh sakta hoon, Mohammad!")
+                     send_whatsapp_interactive_message(from_number, "Cortex: Abhi main sirf text, images, aur buttons samajh sakta hoon, Mohammad!")
                  return jsonify({"status": "unsupported_type"}), 200
 
 
             # --- PROCESS TEXT/TRANSCRIPT/INTERACTIVE ID ---
             if message_text:
                 
-                # Phele Special Commands check karo (jaise !remember)
                 special_response = handle_special_commands(message_text)
                 
                 if special_response:
                     send_whatsapp_interactive_message(from_number, special_response)
                 
-                # Agar Interactive ID ya normal text ho, toh chat_with_ai ko de do
                 else:
                     ai_response = chat_with_ai(message_text, user_history)
-                    
-                    # Ab yahan logic aayegi ki kya Text bhejoon ya Interactive Button bhejoon?
-                    # Agar AI ne ek special tag (jaise [BUTTONS] ya [LIST]) reply kiya hai, toh use parse karo.
-                    
-                    # FOR SIMPLICITY: Abhi hum simple text hi bhej rahe hain, lekin ab hamara function Interactive messages bhej sakta hai.
                     send_whatsapp_interactive_message(from_number, ai_response)
                     
                     user_history.append({"role": "user", "content": message_text})
