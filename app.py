@@ -11,8 +11,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Load all credentials from the .env file
 load_dotenv() 
 
-# Import the existing chat handler logic
-from chat_handler import chat_with_ai, handle_special_commands, analyze_image 
+# --- FINAL CORRECT IMPORT ---
+# Only import what is needed: chat_with_ai and handle_special_commands
+from chat_handler import chat_with_ai, handle_special_commands 
 
 app = Flask(__name__)
 
@@ -23,10 +24,9 @@ CHAT_CONTEXT_HISTORY = {}
 def send_whatsapp_message(to_number, text_message):
     """Sends a message back to the user via WhatsApp API."""
     
-    # CRITICAL FIX: Variables ko function ke andar load karo 
     WA_TOKEN = os.getenv("WA_ACCESS_TOKEN")
     WA_PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-    API_VERSION = "v20.0"  # <--- FINAL VERSION FIX
+    API_VERSION = "v18.0"
     API_URL = f"https://graph.facebook.com/{API_VERSION}/{WA_PHONE_NUMBER_ID}/messages" 
 
     if not WA_TOKEN or not WA_PHONE_NUMBER_ID:
@@ -37,21 +37,19 @@ def send_whatsapp_message(to_number, text_message):
     data = {"messaging_product": "whatsapp", "to": to_number, "type": "text", "text": {"body": text_message}}
     
     try:
-        # SSL VERIFICATION BYPASS
         response = requests.post(API_URL, headers=headers, json=data, verify=False) 
         
         if response.status_code != 200:
             print(f"FATAL API ERROR (Reply Failed): Status={response.status_code} | Response Body={response.text}")
             return {"status": "api_error", "response": response.json()}
         
-        print("SUCCESS: Message sent to Meta API.")
         return response.json()
     
     except requests.exceptions.RequestException as e:
         print(f"CRITICAL NETWORK ERROR: Could not connect to Meta API. Error: {e}")
         return {"status": "network_fail"}
 
-# --- Webhook and Message Handler (Rest of the code is unchanged) ---
+# --- 1. Webhook Verification ---
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     VERIFY_TOKEN = "MOHAMMAD_CORTEX_2025" 
@@ -62,6 +60,7 @@ def verify_webhook():
     print("Verification Failed: Token Mismatch!")
     return "Verification token mismatch", 403
 
+# --- 2. Message Reception (CLEANED UP LOGIC) ---
 @app.route("/webhook", methods=["POST"])
 def webhook_handler():
     data = request.get_json()
@@ -92,20 +91,15 @@ def webhook_handler():
             
             message_text = None
             
-            if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
-            user_history = CHAT_CONTEXT_HISTORY[from_number]
-
-            # --- IMAGE MESSAGE HANDLING ---
-            if message_data.get("type") == "image":
-                # ... (Image handling logic here)
-                pass # Skipping for brevity
-
             # --- TEXT MESSAGE HANDLING ---
-            elif message_data.get("type") == "text":
+            if message_data.get("type") == "text":
                 message_text = message_data.get("text", {}).get("body")
 
             # --- PROCESS TEXT/TRANSCRIPT ---
             if message_text:
+                if from_number not in CHAT_CONTEXT_HISTORY: CHAT_CONTEXT_HISTORY[from_number] = []
+                user_history = CHAT_CONTEXT_HISTORY[from_number]
+                
                 special_response = handle_special_commands(message_text)
                 
                 if special_response:
@@ -114,7 +108,6 @@ def webhook_handler():
                     ai_response = chat_with_ai(message_text, user_history)
                     send_whatsapp_message(from_number, ai_response)
                     
-                    # Save history
                     user_history.append({"role": "user", "content": message_text})
                     user_history.append({"role": "assistant", "content": ai_response})
                     CHAT_CONTEXT_HISTORY[from_number] = user_history[-10:] 
@@ -122,14 +115,15 @@ def webhook_handler():
                 return jsonify({"status": "message_processed"}), 200
 
             else:
+                # Catch all unsupported media types (image, video, audio, document, etc.)
                 if from_number:
-                    send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages aur images samajh sakta hoon, Mohammad!")
+                    send_whatsapp_message(from_number, "Cortex: Abhi main sirf text messages samajh sakta hoon, Mohammad!")
                 return jsonify({"status": "unsupported_type"}), 200
 
         except Exception as e:
             print(f"CRITICAL RUNTIME ERROR: {e}")
             if 'from_number' in locals() and from_number:
-                 send_whatsapp_message(from_number, "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi.")
+                 send_whatsapp_message(from_number, "Cortex: Maafi chahunga, mere system mein kuch gadbad ho gayi. Detail: Check terminal for network errors.")
             
             return jsonify({"status": "runtime_error", "details": str(e)}), 200
     
